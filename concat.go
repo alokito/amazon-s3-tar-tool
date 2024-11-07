@@ -7,10 +7,12 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"io"
+	"net/url"
 	"path/filepath"
 	"time"
+
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
@@ -103,12 +105,13 @@ func (r *RecursiveConcat) uploadPartCopy(object *S3Obj, uploadId string, bucket,
 
 	copySourceRange := fmt.Sprintf("bytes=%d-%d", start, end-1)
 
+	var copySource = url.QueryEscape(object.Bucket + "/" + *object.Key)
 	input := s3.UploadPartCopyInput{
 		Bucket:          &bucket,
 		Key:             &key,
 		PartNumber:      aws.Int32(partNum),
 		UploadId:        &uploadId,
-		CopySource:      aws.String(object.Bucket + "/" + *object.Key),
+		CopySource:      aws.String(copySource),
 		CopySourceRange: aws.String(copySourceRange),
 	}
 
@@ -150,7 +153,7 @@ func (r *RecursiveConcat) mergePair(ctx context.Context, objectList []*S3Obj, tr
 			part, err = r.uploadPart(o, uploadId, bucket, key, int32(i+1))
 			accumSize += int64(len(o.Data))
 		} else if *o.Size > 0 {
-			Debugf(ctx, "uploadPartCopy bucket:%s key:%s %d", o.Bucket, *o.Key, len(o.Data))
+			Debugf(ctx, "uploadPartCopy bucket:%s key:%s %d", o.Bucket, *o.Key, *o.Size)
 			part, err = r.uploadPartCopy(o, uploadId, bucket, key, int32(i+1), trim, *o.Size)
 			accumSize += int64(*o.Size) - trim
 		}
@@ -222,7 +225,7 @@ func (r *RecursiveConcat) ConcatObjects(ctx context.Context, objectList []*S3Obj
 			object.Bucket = bucket
 		}
 		var err error
-		Debugf(ctx, "accum: s3://%s/%s <- s3://%s/%s data %d", accum.Bucket, *accum.Key, object.Bucket, *object.Key, len(object.Data))
+		Debugf(ctx, "accum: s3://%s/%s <- s3://%s/%s data %d, size %d", accum.Bucket, *accum.Key, object.Bucket, *object.Key, len(object.Data), *object.Size)
 		accum, err = r.mergePair(ctx, []*S3Obj{accum, object}, 0, bucket, key)
 		if err != nil {
 			return nil, err
