@@ -125,11 +125,11 @@ func createFromList(ctx context.Context, svc *s3.Client, objectList []*S3Obj, op
 		}
 		headList := make([]*s3.HeadObjectOutput, len(objectList))
 		if opts.PreservePOSIXMetadata {
-			var wg sync.WaitGroup
+			swg := sizedwaitgroup.New(threads)
 			for i, obj := range objectList {
-				wg.Add(1)
+				swg.Add()
 				go func(i int, obj *S3Obj) {
-					defer wg.Done()
+					defer swg.Done()
 					if obj.NoHeaderRequired {
 						headList[i] = nil
 					} else {
@@ -138,7 +138,7 @@ func createFromList(ctx context.Context, svc *s3.Client, objectList []*S3Obj, op
 					}
 				}(i, obj)
 			}
-			wg.Wait()
+			swg.Wait()
 		}
 
 		Debugf(ctx, "building toc")
