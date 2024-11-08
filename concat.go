@@ -147,21 +147,30 @@ func (r *RecursiveConcat) mergePair(ctx context.Context, objectList []*S3Obj, tr
 	var accumSize int64 = 0
 	for i, o := range objectList {
 		part := types.CompletedPart{}
+		var partNum int32 = int32(i + 1)
 		var err error
 		if len(o.Data) > 0 {
 			// Debugf(ctx,"uploadPart key:%d", len(o.Data))
-			part, err = r.uploadPart(o, uploadId, bucket, key, int32(i+1))
+			part, err = r.uploadPart(o, uploadId, bucket, key, partNum)
 			accumSize += int64(len(o.Data))
+			if err != nil {
+				fmt.Printf("error 1\n")
+				fmt.Printf("UploadPart failed\n")
+				fmt.Printf("len(o.Data): %d\n", len(o.Data))
+				fmt.Printf("uploadId: %s, bucket: %s, key: %s, start: %d, size: %d\n", uploadId, bucket, key, trim, o.Size)
+			}
 		} else if *o.Size > 0 {
-			Debugf(ctx, "uploadPartCopy bucket:%s key:%s %d", o.Bucket, *o.Key, *o.Size)
-			part, err = r.uploadPartCopy(o, uploadId, bucket, key, int32(i+1), trim, *o.Size)
+			Debugf(ctx, "UploadPartCopy Start %s/%s %d", o.Bucket, *o.Key, *o.Size)
+			part, err = r.uploadPartCopy(o, uploadId, bucket, key, partNum, trim, *o.Size)
 			accumSize += int64(*o.Size) - trim
+			if err == nil {
+				Debugf(ctx, "UploadPartCopy Success source %s/%s %d -> dest %s/%s", o.Bucket, *o.Key, *o.Size, bucket, key)
+			} else {
+				fmt.Printf("error 1\n")
+				fmt.Printf("UploadPartCopy failed part: %d, source %s/%s (bytes %d-%d) -> dest %s/%s, upload %s", partNum, o.Bucket, *o.Key, trim, *o.Size, bucket, key, uploadId)
+			}
 		}
 		if err != nil {
-			fmt.Printf("error 1\n")
-			fmt.Printf("UploadPart[Copy] failed\n")
-			fmt.Printf("len(o.Data): %d\n", len(o.Data))
-			fmt.Printf("uploadId: %s, bucket: %s, key: %s, start: %d, end: %d\n", uploadId, bucket, key, trim, o.Size)
 			return complete, err
 		}
 		if *o.Size > 0 {

@@ -17,6 +17,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/schollz/progressbar/v3"
+
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -351,7 +353,7 @@ func breakUpList(ctx context.Context, svc *s3.Client, objectList []*S3Obj, opts 
 					return err
 				}
 				tempKey := filepath.Join(opts.DstPrefix, opts.DstKey+".parts", fn)
-				obj, err := concatObjects(ctx, svc, 0, batch, opts.DstBucket, tempKey)
+				obj, err := concatObjects(ctx, svc, 0, batch, opts.DstBucket, tempKey, false)
 				if err == nil {
 					obj.PartNum = i + 1
 					results[i] = obj
@@ -386,7 +388,7 @@ func processLargeFiles(ctx context.Context, svc *s3.Client, objectList []*S3Obj,
 	Debugf(ctx, "list reduced\n")
 
 	tempKey := filepath.Join(opts.DstPrefix, opts.DstKey+".parts", "output.temp")
-	concatObj, err := concatObjects(ctx, svc, 0, results, opts.DstBucket, tempKey)
+	concatObj, err := concatObjects(ctx, svc, 0, results, opts.DstBucket, tempKey, opts.ShowProgressBar)
 	if err != nil {
 		return nil, err
 	}
@@ -538,7 +540,14 @@ func processSmallFiles(ctx context.Context, client *s3.Client, objectList []*S3O
 	g.SetLimit(opts.Threads)
 	groups := make([]*S3Obj, len(indexList))
 
-	Debugf(ctx, "Created %d parts", len(indexList))
+	var showProgressBar = opts.ShowProgressBar
+
+	var bar *progressbar.ProgressBar
+	if showProgressBar {
+		bar = NewProgressBar(len(indexList), "Building parts")
+		defer bar.Finish()
+	}
+
 	for i, p := range indexList {
 		i, p := i, p
 		start := p.Start
@@ -551,16 +560,23 @@ func processSmallFiles(ctx context.Context, client *s3.Client, objectList []*S3O
 			}
 			newPart.PartNum = start
 			groups[i] = newPart
+			if showProgressBar {
+				bar.Add(1)
+			}
 			return nil
 		})
 	}
-
 	Debugf(ctx, "Waiting for threads")
 	//swg.Wait()
 	if err := g.Wait(); err != nil {
 		return nil, err
 	}
 	sort.Sort(byPartNum(groups))
+	if showProgressBar {
+		bar.Finish()
+		var state = bar.State()
+		fmt.Printf("%s total time elapsed: %f\n", state.Description, state.SecondsSince)
+	}
 
 	// reset partNum counts.
 	// Figure out if the final concat needs to be recursive
@@ -582,6 +598,7 @@ func processSmallFiles(ctx context.Context, client *s3.Client, objectList []*S3O
 				Size: aws.Int64(int64(len(pad))),
 			},
 			Data: pad}
+
 		for i := 0; i < len(groups); i++ {
 			var err error
 			var pair []*S3Obj
@@ -595,7 +612,7 @@ func processSmallFiles(ctx context.Context, client *s3.Client, objectList []*S3O
 				trim = beginningPad
 			}
 			Debugf(ctx, "Concat(%s,%s)", *pair[0].Key, *pair[1].Key)
-			finalObject, err = concatObjects(ctx, client, trim, pair, opts.DstBucket, opts.DstKey)
+			finalObject, err = concatObjects(ctx, client, trim, pair, opts.DstBucket, opts.DstKey, showProgressBar)
 			if err != nil {
 				fmt.Print(err.Error())
 				return NewS3Obj(), err
@@ -603,7 +620,7 @@ func processSmallFiles(ctx context.Context, client *s3.Client, objectList []*S3O
 		}
 	} else {
 		var err error
-		finalObject, err = concatObjects(ctx, client, 0, groups, opts.DstBucket, opts.DstKey)
+		finalObject, err = concatObjects(ctx, client, 0, groups, opts.DstBucket, opts.DstKey, showProgressBar)
 		if err != nil {
 			Debugf(ctx, "error recursion on final\n%s", err.Error())
 			return NewS3Obj(), err
@@ -613,7 +630,16 @@ func processSmallFiles(ctx context.Context, client *s3.Client, objectList []*S3O
 	return redistribute(ctx, client, finalObject, 0, opts.DstBucket, opts.DstKey, opts.storageClass, opts.ObjectTags)
 
 }
+func NewProgressBar(max int, name string) *progressbar.ProgressBar {
+	return progressbar.NewOptions(max,
+		progressbar.OptionSetDescription(name),
+		progressbar.OptionSetPredictTime(true),
+		progressbar.OptionShowCount(),
+		progressbar.OptionThrottle(2000*time.Millisecond),
+	)
+}
 
+// _processSmallFiles processes a range of small files from the given objectList and headList.
 // _processSmallFiles processes a range of small files from the given objectList and headList.
 // It generates tar headers for each file and concatenates them into a finalPart.
 // If a file does not require a tar header, it is appended directly to the parts list.
@@ -762,7 +788,7 @@ func createGroups(ctx context.Context, objectList []*S3Obj) ([]Index, int64) {
 	return indexList, totalSize
 }
 
-func concatObjects(ctx context.Context, client *s3.Client, trimFirstBytes int, objectList []*S3Obj, bucket, key string) (*S3Obj, error) {
+func concatObjects(ctx context.Context, client *s3.Client, trimFirstBytes int, objectList []*S3Obj, bucket, key string, showProgressBar bool) (*S3Obj, error) {
 	complete := NewS3Obj()
 	output, err := client.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{
 		Bucket: &bucket,
@@ -777,6 +803,12 @@ func concatObjects(ctx context.Context, client *s3.Client, trimFirstBytes int, o
 	var parts []types.CompletedPart
 	m := sync.RWMutex{}
 	swg := sizedwaitgroup.New(threads)
+
+	var bar2 *progressbar.ProgressBar
+	if showProgressBar {
+		bar2 = NewProgressBar(len(objectList), "ConcatObjects")
+		defer bar2.Finish()
+	}
 	for i, object := range objectList {
 		partNum := int32(i + 1)
 		if len(object.Data) > 0 {
@@ -796,6 +828,9 @@ func concatObjects(ctx context.Context, client *s3.Client, trimFirstBytes int, o
 				if err != nil {
 					Debugf(ctx, "error for s3://%s/%s", *input.Bucket, *input.Key)
 					panic(err)
+				}
+				if showProgressBar {
+					bar2.Add(1)
 				}
 				m.Lock()
 				parts = append(parts, types.CompletedPart{
@@ -830,6 +865,9 @@ func concatObjects(ctx context.Context, client *s3.Client, trimFirstBytes int, o
 					Debugf(ctx, "error for s3://%s/%s", *input.Bucket, *input.Key)
 					panic(err)
 				}
+				if showProgressBar {
+					bar2.Add(1)
+				}
 				m.Lock()
 				parts = append(parts, types.CompletedPart{
 					ETag:       r.CopyPartResult.ETag,
@@ -852,6 +890,11 @@ func concatObjects(ctx context.Context, client *s3.Client, trimFirstBytes int, o
 			Parts: parts,
 		},
 	})
+	if showProgressBar {
+		bar2.Finish()
+		var state = bar2.State()
+		fmt.Printf("%s total time elapsed: %f\n", state.Description, state.SecondsSince)
+	}
 	if err != nil {
 		return complete, err
 	}

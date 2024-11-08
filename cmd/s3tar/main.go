@@ -71,6 +71,7 @@ func run(args []string) error {
 	var kmsKeyID string
 	var sseAlgo string
 	var preservePosixMetadata bool
+	var showProgressBar bool
 
 	var tagSet types.Tagging
 	var err error
@@ -257,6 +258,12 @@ func run(args []string) error {
 				Usage:       "Preserve POSIX permisions, uid and gid if present in S3 object metadata. See https://docs.aws.amazon.com/fsx/latest/LustreGuide/posix-metadata-support.html",
 				Destination: &preservePosixMetadata,
 			},
+			&cli.BoolFlag{
+				Name:        "progress-bar",
+				Value:       false,
+				Usage:       "show progress bar",
+				Destination: &showProgressBar,
+			},
 		},
 		Action: func(cCtx *cli.Context) error {
 			logLevel := parseLogLevel(cCtx.Count("verbose"))
@@ -325,6 +332,7 @@ func run(args []string) error {
 					UserMaxPartSize:       userPartMaxSize,
 					ObjectTags:            tagSet,
 					PreservePOSIXMetadata: preservePosixMetadata,
+					ShowProgressBar:       showProgressBar,
 				}
 				s3opts.DstBucket, s3opts.DstKey = s3tar.ExtractBucketAndPath(archiveFile)
 				s3opts.DstPrefix = filepath.Dir(s3opts.DstKey)
@@ -394,6 +402,7 @@ func run(args []string) error {
 					EndpointUrl:           endpointUrl,
 					ExternalToc:           externalToc,
 					PreservePOSIXMetadata: preservePosixMetadata,
+					ShowProgressBar:       showProgressBar,
 				}
 				s3opts.SrcBucket, s3opts.SrcKey = s3tar.ExtractBucketAndPath(archiveFile)
 				s3opts.SrcPrefix = filepath.Dir(s3opts.SrcKey)
@@ -404,11 +413,12 @@ func run(args []string) error {
 				return archiveClient.Extract(ctx, s3opts, s3tar.WithExtractPrefix(prefix))
 			} else if list {
 				s3opts := &s3tar.S3TarS3Options{
-					Threads:      threads,
-					DeleteSource: false,
-					Region:       region,
-					EndpointUrl:  endpointUrl,
-					ExternalToc:  externalToc,
+					Threads:         threads,
+					DeleteSource:    false,
+					Region:          region,
+					EndpointUrl:     endpointUrl,
+					ExternalToc:     externalToc,
+					ShowProgressBar: showProgressBar,
 				}
 				archiveClient := newArchiveClient(svc)
 				toc, err := archiveClient.List(ctx, archiveFile, s3opts)
@@ -426,12 +436,13 @@ func run(args []string) error {
 				// s3tar --generate-toc -f my-previous-archive.tar -C /home/user/my-previous-archive.toc.csv
 				bucket, key := s3tar.ExtractBucketAndPath(archiveFile)
 				s3opts := &s3tar.S3TarS3Options{
-					Threads:      threads,
-					DeleteSource: false,
-					Region:       region,
-					EndpointUrl:  endpointUrl,
-					SrcBucket:    bucket,
-					SrcKey:       key,
+					Threads:         threads,
+					DeleteSource:    false,
+					Region:          region,
+					EndpointUrl:     endpointUrl,
+					SrcBucket:       bucket,
+					SrcKey:          key,
+					ShowProgressBar: showProgressBar,
 				}
 				err := s3tar.GenerateToc(ctx, svc, archiveFile, destination, s3opts)
 				if err != nil {

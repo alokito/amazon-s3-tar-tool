@@ -61,6 +61,7 @@ type S3TarS3Options struct {
 	KMSKeyID              string
 	SSEAlgo               types.ServerSideEncryption
 	PreservePOSIXMetadata bool
+	ShowProgressBar       bool
 }
 
 func TagsToUrlEncodedString(tagging types.Tagging) string {

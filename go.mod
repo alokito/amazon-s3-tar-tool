@@ -1,6 +1,8 @@
 module github.com/awslabs/amazon-s3-tar-tool
 
-go 1.20
+go 1.22
+
+toolchain go1.23.0
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.25.3
@@ -9,6 +11,13 @@ require (
 	github.com/remeh/sizedwaitgroup v1.0.0
 	github.com/urfave/cli/v2 v2.27.1
 	golang.org/x/sync v0.6.0
+)
+
+require (
+	github.com/mitchellh/colorstring v0.0.0-20190213212951-d06e56a500db // indirect
+	github.com/rivo/uniseg v0.4.7 // indirect
+	golang.org/x/sys v0.26.0 // indirect
+	golang.org/x/term v0.25.0 // indirect
 )
 
 require (
@@ -29,5 +38,6 @@ require (
 	github.com/aws/smithy-go v1.20.1 // indirect
 	github.com/cpuguy83/go-md2man/v2 v2.0.3 // indirect
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
+	github.com/schollz/progressbar/v3 v3.17.0
 	github.com/xrash/smetrics v0.0.0-20240312152122-5f08fbb34913 // indirect
 )
