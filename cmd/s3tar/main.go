@@ -72,6 +72,7 @@ func run(args []string) error {
 	var sseAlgo string
 	var preservePosixMetadata bool
 	var showProgressBar bool
+	var timeResolution string
 
 	var tagSet types.Tagging
 	var err error
@@ -264,6 +265,12 @@ func run(args []string) error {
 				Usage:       "show progress bar",
 				Destination: &showProgressBar,
 			},
+			&cli.StringFlag{
+				Name:        "time-resolution",
+				Value:       "ns",
+				Usage:       "Time resolution for posix metadata, default is ns (nanoseconds), can be s (seconds), ms (milliseconds), us (microseconds)",
+				Destination: &timeResolution,
+			},
 		},
 		Action: func(cCtx *cli.Context) error {
 			logLevel := parseLogLevel(cCtx.Count("verbose"))
@@ -333,6 +340,7 @@ func run(args []string) error {
 					ObjectTags:            tagSet,
 					PreservePOSIXMetadata: preservePosixMetadata,
 					ShowProgressBar:       showProgressBar,
+					TimeResolution:        s3tar.TimeResolutionValue(timeResolution),
 				}
 				s3opts.DstBucket, s3opts.DstKey = s3tar.ExtractBucketAndPath(archiveFile)
 				s3opts.DstPrefix = filepath.Dir(s3opts.DstKey)
@@ -403,6 +411,7 @@ func run(args []string) error {
 					ExternalToc:           externalToc,
 					PreservePOSIXMetadata: preservePosixMetadata,
 					ShowProgressBar:       showProgressBar,
+					TimeResolution:        s3tar.TimeResolutionValue(timeResolution),
 				}
 				s3opts.SrcBucket, s3opts.SrcKey = s3tar.ExtractBucketAndPath(archiveFile)
 				s3opts.SrcPrefix = filepath.Dir(s3opts.SrcKey)

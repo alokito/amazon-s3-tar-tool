@@ -36,6 +36,16 @@ var (
 	extractS3 = regexp.MustCompile(`s3://(.[^/]*)/?(.*)`)
 )
 
+type TimeResolutionValue string
+
+// Enum values for SessionMode
+const (
+	TimeResolutionSeconds      TimeResolutionValue = "s"
+	TimeResolutionMilliseconds TimeResolutionValue = "ms"
+	TimeResolutionMicroseconds TimeResolutionValue = "us"
+	TimeResolutionNanoseconds  TimeResolutionValue = "ns"
+)
+
 // S3TarS3Options options to create an archive
 type S3TarS3Options struct {
 	SrcManifest           string
@@ -62,6 +72,7 @@ type S3TarS3Options struct {
 	SSEAlgo               types.ServerSideEncryption
 	PreservePOSIXMetadata bool
 	ShowProgressBar       bool
+	TimeResolution        TimeResolutionValue
 }
 
 func TagsToUrlEncodedString(tagging types.Tagging) string {

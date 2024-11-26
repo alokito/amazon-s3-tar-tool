@@ -27,7 +27,7 @@ func SetLogLevel(ctx context.Context, level int) context.Context {
 }
 
 func SetupLogger(incoming context.Context) context.Context {
-	logger := log.New(os.Stdout, "", 0)
+	logger := log.New(os.Stdout, "", log.LstdFlags)
 	logger.SetOutput(new(logWriter))
 	return context.WithValue(incoming, contextKeyLogger, logger)
 }

@@ -143,6 +143,9 @@ func (r *RecursiveConcat) mergePair(ctx context.Context, objectList []*S3Obj, tr
 	}
 
 	uploadId := *output.UploadId
+
+	Debugf(ctx, "CreateMultipartUpload(%s) to %s/%s", uploadId[:8], bucket, key)
+
 	parts := []types.CompletedPart{}
 	var accumSize int64 = 0
 	for i, o := range objectList {
@@ -150,24 +153,24 @@ func (r *RecursiveConcat) mergePair(ctx context.Context, objectList []*S3Obj, tr
 		var partNum int32 = int32(i + 1)
 		var err error
 		if len(o.Data) > 0 {
-			// Debugf(ctx,"uploadPart key:%d", len(o.Data))
+			Debugf(ctx, "UploadPart(%s) Start %s/%s %d", uploadId[:8], o.Bucket, *o.Key, len(o.Data))
 			part, err = r.uploadPart(o, uploadId, bucket, key, partNum)
 			accumSize += int64(len(o.Data))
-			if err != nil {
+			if err == nil {
+				Debugf(ctx, "UploadPart(%s) Success source %s/%s (size %d) -> dest %s/%s", uploadId[:8], o.Bucket, *o.Key, len(o.Data), bucket, key)
+			} else {
 				fmt.Printf("error 1\n")
-				fmt.Printf("UploadPart failed\n")
-				fmt.Printf("len(o.Data): %d\n", len(o.Data))
-				fmt.Printf("uploadId: %s, bucket: %s, key: %s, start: %d, size: %d\n", uploadId, bucket, key, trim, o.Size)
+				fmt.Printf("UploadPart(%s) failed part: %d, source %s/%s (bytes %d) -> dest %s/%s, %s upload %s", uploadId[:8], partNum, o.Bucket, *o.Key, len(o.Data), bucket, key, err.Error(), uploadId)
 			}
 		} else if *o.Size > 0 {
-			Debugf(ctx, "UploadPartCopy Start %s/%s %d", o.Bucket, *o.Key, *o.Size)
+			Debugf(ctx, "UploadPartCopy(%s) Start %s/%s %d", uploadId[:8], o.Bucket, *o.Key, *o.Size)
 			part, err = r.uploadPartCopy(o, uploadId, bucket, key, partNum, trim, *o.Size)
 			accumSize += int64(*o.Size) - trim
 			if err == nil {
-				Debugf(ctx, "UploadPartCopy Success source %s/%s %d -> dest %s/%s", o.Bucket, *o.Key, *o.Size, bucket, key)
+				Debugf(ctx, "UploadPartCopy(%s) Success source %s/%s (bytes %d-%d) -> dest %s/%s", uploadId[:8], o.Bucket, *o.Key, trim, *o.Size, bucket, key)
 			} else {
 				fmt.Printf("error 1\n")
-				fmt.Printf("UploadPartCopy failed part: %d, source %s/%s (bytes %d-%d) -> dest %s/%s, upload %s", partNum, o.Bucket, *o.Key, trim, *o.Size, bucket, key, uploadId)
+				fmt.Printf("UploadPartCopy(%s) failed part: %d, source %s/%s (bytes %d-%d) -> dest %s/%s, %s upload %s", uploadId[:8], partNum, o.Bucket, *o.Key, trim, *o.Size, bucket, key, err.Error(), uploadId)
 			}
 		}
 		if err != nil {
@@ -188,6 +191,8 @@ func (r *RecursiveConcat) mergePair(ctx context.Context, objectList []*S3Obj, tr
 	})
 	if err != nil {
 		return complete, err
+	} else {
+		Debugf(ctx, "CompleteMultipartUpload(%s) to %s/%s", uploadId[:8], bucket, key)
 	}
 
 	now := time.Now()

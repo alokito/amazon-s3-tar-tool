@@ -144,7 +144,7 @@ func createFromList(ctx context.Context, svc *s3.Client, objectList []*S3Obj, op
 		}
 
 		Debugf(ctx, "building toc")
-		manifestObj, _, err := buildToc(ctx, objectList)
+		manifestObj, _, err := buildToc(ctx, objectList, opts.TimeResolution)
 		if err != nil {
 			fmt.Printf("buildToc: %s", err.Error())
 			return err
@@ -220,7 +220,7 @@ func concatObjAndHeader(ctx context.Context, svc *s3.Client, objectList []*S3Obj
 	if err != nil {
 		return nil, err
 	}
-	manifestObj, _, err := buildToc(ctx, objectList)
+	manifestObj, _, err := buildToc(ctx, objectList, opts.TimeResolution)
 	if err != nil {
 		return nil, err
 	}
@@ -255,7 +255,7 @@ func concatObjAndHeader(ctx context.Context, svc *s3.Client, objectList []*S3Obj
 					head = nil
 				}
 
-				h := buildHeader(nextObject, p1, false, head)
+				h := buildHeader(nextObject, p1, false, head, opts.TimeResolution)
 				p2 = &h
 				bytesAccum += *p1.Size + *p2.Size
 			} else {
@@ -393,7 +393,7 @@ func processLargeFiles(ctx context.Context, svc *s3.Client, objectList []*S3Obj,
 		return nil, err
 	}
 
-	finalObject, err := redistribute(ctx, svc, concatObj, beginningPad, opts.DstBucket, opts.DstKey, opts.storageClass, opts.ObjectTags)
+	finalObject, err := redistribute(ctx, svc, concatObj, beginningPad, opts.DstBucket, opts.DstKey, opts.storageClass, opts.ObjectTags, opts.ShowProgressBar)
 	if err != nil {
 		return nil, err
 	}
@@ -405,7 +405,7 @@ func processLargeFiles(ctx context.Context, svc *s3.Client, objectList []*S3Obj,
 
 // redistribute will try to evenly distribute the object into equal size parts.
 // it will also trim whatever offset passed, helpful to remove the front padding
-func redistribute(ctx context.Context, client *s3.Client, obj *S3Obj, trimoffset int64, bucket, key string, storageClass types.StorageClass, tagSet types.Tagging) (*S3Obj, error) {
+func redistribute(ctx context.Context, client *s3.Client, obj *S3Obj, trimoffset int64, bucket, key string, storageClass types.StorageClass, tagSet types.Tagging, showProgressBar bool) (*S3Obj, error) {
 	finalSize := *obj.Size - trimoffset
 	min, max, mid := findMinMaxPartRange(finalSize)
 	var r int64 = 0
@@ -418,11 +418,11 @@ func redistribute(ctx context.Context, client *s3.Client, obj *S3Obj, trimoffset
 	}
 
 	partSize := finalSize / mid
-	Warnf(ctx, "redistribute calculations")
-	Warnf(ctx, "parts: %d", mid)
-	Warnf(ctx, "FinalSize:\t%d", finalSize)
-	Warnf(ctx, "total:\t%d", partSize*mid)
-	Warnf(ctx, "PartSize:\t%d", partSize)
+	fmt.Printf("redistribute calculations")
+	fmt.Printf("parts: %d", mid)
+	fmt.Printf("FinalSize:\t%d", finalSize)
+	fmt.Printf("total:\t%d", partSize*mid)
+	fmt.Printf("PartSize:\t%d", partSize)
 	var start int64 = 0
 	type IndexLoc struct {
 		Start int64
@@ -461,7 +461,13 @@ func redistribute(ctx context.Context, client *s3.Client, obj *S3Obj, trimoffset
 	Redistribute := func(ctx context.Context, indexList []IndexLoc) ([]types.CompletedPart, error) {
 		g, ctx := errgroup.WithContext(ctx)
 		g.SetLimit(threads)
+
 		parts := make([]types.CompletedPart, len(indexList))
+		var bar2 *progressbar.ProgressBar
+		if showProgressBar {
+			bar2 = NewProgressBar(len(indexList), "Redistribute")
+			defer bar2.Finish()
+		}
 		for i, r := range indexList {
 			i, r := i, r
 			g.Go(func() error {
@@ -477,6 +483,9 @@ func redistribute(ctx context.Context, client *s3.Client, obj *S3Obj, trimoffset
 				}
 				Debugf(ctx, "UploadPartCopy (s3://%s/%s) into:\n\ts3://%s/%s", *input.Bucket, *input.Key, bucket, key)
 				rc, err := client.UploadPartCopy(ctx, &input)
+				if showProgressBar {
+					bar2.Add(1)
+				}
 				if err != nil {
 					Debugf(ctx, "error for s3://%s/%s", *input.Bucket, *input.Key)
 					Debugf(ctx, "CopySourceRange %s", *input.CopySourceRange)
@@ -490,6 +499,11 @@ func redistribute(ctx context.Context, client *s3.Client, obj *S3Obj, trimoffset
 		}
 		if err := g.Wait(); err != nil {
 			return nil, err
+		}
+		if showProgressBar {
+			bar2.Finish()
+			var state = bar2.State()
+			fmt.Printf("\n%s total time elapsed: %f\n", state.Description, state.SecondsSince)
 		}
 		return parts, nil
 	}
@@ -512,6 +526,7 @@ func redistribute(ctx context.Context, client *s3.Client, obj *S3Obj, trimoffset
 		Infof(ctx, err.Error())
 		return nil, err
 	}
+
 	now := time.Now()
 	complete = &S3Obj{
 		Bucket: *completeOutput.Bucket,
@@ -530,7 +545,7 @@ func processSmallFiles(ctx context.Context, client *s3.Client, objectList []*S3O
 
 	Debugf(ctx, "processSmallFiles path")
 
-	indexList, totalSize := createGroups(ctx, objectList)
+	indexList, totalSize := createGroups(ctx, objectList, opts.TimeResolution)
 	eofPadding := generateLastBlock(totalSize, opts)
 	objectList = append(objectList, eofPadding)
 	headList = append(headList, nil)
@@ -566,16 +581,18 @@ func processSmallFiles(ctx context.Context, client *s3.Client, objectList []*S3O
 			return nil
 		})
 	}
-	Debugf(ctx, "Waiting for threads")
+	fmt.Printf("Waiting for threads")
 	//swg.Wait()
+
 	if err := g.Wait(); err != nil {
 		return nil, err
 	}
+	fmt.Printf("Sorting parts")
 	sort.Sort(byPartNum(groups))
 	if showProgressBar {
 		bar.Finish()
 		var state = bar.State()
-		fmt.Printf("%s total time elapsed: %f\n", state.Description, state.SecondsSince)
+		fmt.Printf("\n%s total time elapsed: %f\n", state.Description, state.SecondsSince)
 	}
 
 	// reset partNum counts.
@@ -589,7 +606,7 @@ func processSmallFiles(ctx context.Context, client *s3.Client, objectList []*S3O
 		}
 	}
 	groups[len(groups)-1].PartNum = len(groups) // setup the last PartNum since we skipped it
-
+	fmt.Printf("Concatenating parts")
 	finalObject := NewS3Obj()
 	if recursiveConcat {
 		padObject := &S3Obj{
@@ -611,8 +628,8 @@ func processSmallFiles(ctx context.Context, client *s3.Client, objectList []*S3O
 			if i == len(groups)-1 {
 				trim = beginningPad
 			}
-			Debugf(ctx, "Concat(%s,%s)", *pair[0].Key, *pair[1].Key)
-			finalObject, err = concatObjects(ctx, client, trim, pair, opts.DstBucket, opts.DstKey, showProgressBar)
+			fmt.Printf("Concat(%s,%s)\n", *pair[0].Key, *pair[1].Key)
+			finalObject, err = concatObjects(ctx, client, trim, pair, opts.DstBucket, opts.DstKey, false)
 			if err != nil {
 				fmt.Print(err.Error())
 				return NewS3Obj(), err
@@ -627,7 +644,7 @@ func processSmallFiles(ctx context.Context, client *s3.Client, objectList []*S3O
 		}
 	}
 
-	return redistribute(ctx, client, finalObject, 0, opts.DstBucket, opts.DstKey, opts.storageClass, opts.ObjectTags)
+	return redistribute(ctx, client, finalObject, 0, opts.DstBucket, opts.DstKey, opts.storageClass, opts.ObjectTags, showProgressBar)
 
 }
 func NewProgressBar(max int, name string) *progressbar.ProgressBar {
@@ -674,7 +691,7 @@ func _processSmallFiles(ctx context.Context, objectList []*S3Obj, headList []*s3
 			if (i - 1) >= 0 {
 				prev = objectList[i-1]
 			}
-			header := buildHeader(objectList[i], prev, false, headList[i])
+			header := buildHeader(objectList[i], prev, false, headList[i], opts.TimeResolution)
 			header.Bucket = opts.DstBucket
 			pairs := []*S3Obj{&header, {
 				Object:  objectList[i].Object, // fix this
@@ -740,7 +757,7 @@ func estimateFinalSize(objectList []*S3Obj) int64 {
 	return estimatedSize
 }
 
-func createGroups(ctx context.Context, objectList []*S3Obj) ([]Index, int64) {
+func createGroups(ctx context.Context, objectList []*S3Obj, timeResolution TimeResolutionValue) ([]Index, int64) {
 
 	// Walk through all the parts and build groups of 500MB
 	// so we can parallelize.
@@ -752,7 +769,7 @@ func createGroups(ctx context.Context, objectList []*S3Obj) ([]Index, int64) {
 	Infof(ctx, "estimated final size: %d bytes (with headers + padding)\nmultipart part-size: %d bytes\n", estimatedSize, partSize)
 
 	// passing nil for head, header is only used to estimate size, so permissions are not needed
-	h := buildHeader(objectList[0], nil, false, nil)
+	h := buildHeader(objectList[0], nil, false, nil, timeResolution)
 	currSize := *h.Size + *objectList[0].Size
 	var totalSize int64 = currSize
 	for i := 1; i < len(objectList); i++ {
@@ -761,7 +778,7 @@ func createGroups(ctx context.Context, objectList []*S3Obj) ([]Index, int64) {
 			prev = objectList[i-1]
 		}
 		// passing nil for head, header is only used to estimate size, so permissions are not needed
-		header := buildHeader(objectList[i], prev, false, nil)
+		header := buildHeader(objectList[i], prev, false, nil, timeResolution)
 		l := int64(len(header.Data)) + *objectList[i].Size
 		currSize += l
 		totalSize += l
@@ -893,7 +910,7 @@ func concatObjects(ctx context.Context, client *s3.Client, trimFirstBytes int, o
 	if showProgressBar {
 		bar2.Finish()
 		var state = bar2.State()
-		fmt.Printf("%s total time elapsed: %f\n", state.Description, state.SecondsSince)
+		fmt.Printf("\n%s total time elapsed: %f\n", state.Description, state.SecondsSince)
 	}
 	if err != nil {
 		return complete, err

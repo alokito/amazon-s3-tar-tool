@@ -53,7 +53,7 @@ import (
 //	}
 //	result := buildHeader(o, prev, addZeros, head)
 //	fmt.Println(result)
-func buildHeader(o, prev *S3Obj, addZeros bool, head *s3.HeadObjectOutput) S3Obj {
+func buildHeader(o, prev *S3Obj, addZeros bool, head *s3.HeadObjectOutput, timeResolution TimeResolutionValue) S3Obj {
 
 	name := *o.Key
 	var buff bytes.Buffer
@@ -67,7 +67,7 @@ func buildHeader(o, prev *S3Obj, addZeros bool, head *s3.HeadObjectOutput) S3Obj
 		AccessTime: time.Now(),
 		Format:     tarFormat,
 	}
-	setHeaderPermissionsS3Head(hdr, head)
+	setHeaderPermissionsS3Head(hdr, head, timeResolution)
 
 	if addZeros {
 		buff.Write(pad)
@@ -98,20 +98,22 @@ func buildHeader(o, prev *S3Obj, addZeros bool, head *s3.HeadObjectOutput) S3Obj
 	}
 }
 
-func setHeaderPermissionsS3Head(hdr *tar.Header, head *s3.HeadObjectOutput) {
+func setHeaderPermissionsS3Head(hdr *tar.Header, head *s3.HeadObjectOutput, timeResolution TimeResolutionValue) {
 	if head != nil {
-		setHeaderPermissions(hdr, head.Metadata)
+		setHeaderPermissions(hdr, head.Metadata, timeResolution)
 	}
 }
 
-// setHeaderPermissions sets the permissions, owner, and group of a tar.Header based on the metadata from s3.HeadObjectOutput.
+// setHeaderPermissions sets the permissions, owner, group and times of a tar.Header based on the metadata from s3.HeadObjectOutput.
+// The hdr parameter is a pointer to the tar.Header that will be modified.
+// The s3metadata parameter is a map of metadata from s3.HeadObjectOutput.
+// The timeResolution parameter is used to truncate time values to the specified resolution.
 // If the "file-permissions" metadata is present, it is parsed as an octal string and set as the Mode of the tar.Header.
 // If the "file-owner" metadata is present, it is parsed as an integer and set as the Uid of the tar.Header.
 // If the "file-group" metadata is present, it is parsed as an integer and set as the Gid of the tar.Header.
-// The hdr parameter is a pointer to the tar.Header that will be modified.
-// The head parameter is a pointer to the s3.HeadObjectOutput that contains the metadata.
-// If head is nil or if the metadata is empty, no modifications will be made to the tar.Header.
-func setHeaderPermissions(hdr *tar.Header, s3metadata map[string]string) {
+// "file-atime", "file-mtime", and "file-ctime" metadata are used to set the AccessTime, ModTime, and ChangeTime of the tar.Header, respectively.
+// If the metadata is empty, no modifications will be made to the tar.Header.
+func setHeaderPermissions(hdr *tar.Header, s3metadata map[string]string, timeResolution TimeResolutionValue) {
 	if len(s3metadata) > 0 {
 		if modeStr, ok := s3metadata["file-permissions"]; ok {
 			modeInt, err := strconv.ParseInt(modeStr, 8, 64)
@@ -135,20 +137,20 @@ func setHeaderPermissions(hdr *tar.Header, s3metadata map[string]string) {
 			hdr.Gid = int(groupInt)
 		}
 		if atimeStr, ok := s3metadata["file-atime"]; ok {
-			hdr.AccessTime = s3metadataToTime(atimeStr)
+			hdr.AccessTime = s3metadataToTime(atimeStr, timeResolution)
 		}
 		if mtimeStr, ok := s3metadata["file-mtime"]; ok {
-			var timeVal = s3metadataToTime(mtimeStr)
+			var timeVal = s3metadataToTime(mtimeStr, timeResolution)
 			hdr.ModTime = timeVal
 		}
 		if ctimeStr, ok := s3metadata["file-ctime"]; ok {
-			var timeVal = s3metadataToTime(ctimeStr)
+			var timeVal = s3metadataToTime(ctimeStr, timeResolution)
 			hdr.ChangeTime = timeVal
 		}
 	}
 }
 
-func s3metadataToTime(timeStr string) time.Time {
+func s3metadataToTime(timeStr string, timeResolution TimeResolutionValue) time.Time {
 	var timeValue time.Time
 	if strings.HasSuffix(timeStr, "ns") {
 		timeInt, err := strconv.ParseInt(strings.TrimSuffix(timeStr, "ns"), 10, 64)
@@ -163,10 +165,22 @@ func s3metadataToTime(timeStr string) time.Time {
 		}
 		timeValue = time.Unix(0, atimeInt*int64(time.Millisecond))
 	}
+
+	switch timeResolution {
+	case TimeResolutionSeconds:
+		timeValue = timeValue.Truncate(time.Second)
+	case TimeResolutionMilliseconds:
+		timeValue = timeValue.Truncate(time.Millisecond)
+	case TimeResolutionMicroseconds:
+		timeValue = timeValue.Truncate(time.Microsecond)
+	case TimeResolutionNanoseconds:
+		timeValue = timeValue.Truncate(time.Nanosecond)
+	}
+
 	return timeValue
 }
 
-func buildHeaders(objectList []*S3Obj, frontPad bool) []*S3Obj {
+func buildHeaders(objectList []*S3Obj, frontPad bool, timeResolution TimeResolutionValue) []*S3Obj {
 	headers := []*S3Obj{}
 	for i := 0; i < len(objectList); i++ {
 		o := objectList[i]
@@ -185,7 +199,7 @@ func buildHeaders(objectList []*S3Obj, frontPad bool) []*S3Obj {
 		 * inspection of createCSVTOC shows that file permissions, uid and gid are not used in the manifest
 		 * therefore we do not need to pass in the head object output
 		 */
-		newObject := buildHeader(o, prev, addZero, nil)
+		newObject := buildHeader(o, prev, addZero, nil, timeResolution)
 		newObject.PartNum = i
 		newObject.Key = aws.String(filename + ".hdr")
 		headers = append(headers, &newObject)
@@ -193,8 +207,8 @@ func buildHeaders(objectList []*S3Obj, frontPad bool) []*S3Obj {
 	return headers
 }
 
-func processHeaders(ctx context.Context, objectList []*S3Obj, frontPad bool) []*S3Obj {
-	headers := buildHeaders(objectList, frontPad)
+func processHeaders(ctx context.Context, objectList []*S3Obj, frontPad bool, timeResolution TimeResolutionValue) []*S3Obj {
+	headers := buildHeaders(objectList, frontPad, timeResolution)
 	sort.Sort(byPartNum(headers))
 
 	///////////////////////

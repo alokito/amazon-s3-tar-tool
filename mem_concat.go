@@ -80,9 +80,11 @@ func buildInMemoryConcat(ctx context.Context, client *s3.Client, objectList []*S
 				i, group := i, group
 
 				g.Go(func() error {
+					startTime := time.Now()
 
 					Infof(ctx, "Part %d of %d has %d objects\n", i+1, len(groups), len(group))
 					data, err := tarGroup(ctx, client, group, opts)
+					Debugf(ctx, "Part %d tarGroup complete, size: %d\n", i+1, len(data))
 					if err != nil {
 						return err
 					}
@@ -101,6 +103,7 @@ func buildInMemoryConcat(ctx context.Context, client *s3.Client, objectList []*S
 						PartNumber:     &partNum,
 						ChecksumSHA256: rc.ChecksumSHA256,
 					}
+					Debugf(ctx, "Part %d size %d count %d uploaded in %s\n", i+1, len(data), len(group), time.Since(startTime))
 					partsSizeList[i] = int64(len(data))
 					return nil
 				})
@@ -243,7 +246,7 @@ func tarGroup(ctx context.Context, client *s3.Client, objectList []*S3Obj, opts 
 			Format:     tarFormat,
 		}
 		if opts.PreservePOSIXMetadata {
-			setHeaderPermissions(&h, s3metadata)
+			setHeaderPermissions(&h, s3metadata, opts.TimeResolution)
 		}
 
 		if err := tw.WriteHeader(&h); err != nil {
